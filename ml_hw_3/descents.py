@@ -24,7 +24,7 @@ class LearningRate:
 
 
 class LossFunction(Enum):
-    MSE = lambda y_true, y_pred: np.sum(np.square(y_true - y_pred)) / y_pred.shape[0]
+    MSE = auto()
     MAE = auto()
     LogCosh = auto()
     Huber = auto()
@@ -74,7 +74,13 @@ class BaseDescent:
         :param y: targets array
         :return: loss: float
         """
-        return self.loss_function(y, self.predict(x))
+        if self.loss_function is LossFunction.MSE:
+            return np.sum(np.square(y - self.predict(x)) / len(y))
+        if self.loss_function is LossFunction.LogCosh:
+            diff = y - self.predict(x)
+            s = np.sign(diff) * diff
+            p = np.exp(-2 * s)
+            return np.mean(s + np.log1p(p) - np.log(2))
 
     def predict(self, x: np.ndarray) -> np.ndarray:
         """
@@ -99,8 +105,10 @@ class VanillaGradientDescent(BaseDescent):
         return self.w - old_w
 
     def calc_gradient(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        return - (2 / x.shape[0]) * x.T @ (y - x @ self.w)
-
+        if self.loss_function is LossFunction.MSE:
+            return - (2 / x.shape[0]) * x.T @ (y - x @ self.w)
+        if self.loss_function is LossFunction.LogCosh:
+            return np.tanh(y - x @ self.w) @ (-x)
 
 class StochasticDescent(VanillaGradientDescent):
     """
@@ -117,7 +125,7 @@ class StochasticDescent(VanillaGradientDescent):
 
     def calc_gradient(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         batch_indices = np.random.randint(low=0, high=x.shape[0], size=self.batch_size)
-        
+
         return super().calc_gradient(x[batch_indices], y[batch_indices])
     
 
@@ -177,6 +185,32 @@ class Adam(VanillaGradientDescent):
         return self.w - old_w
 
 
+class AdaMax(VanillaGradientDescent):
+    def __init__(self, dimension: int, lambda_: float = 1e-3, loss_function: LossFunction = LossFunction.MSE):
+        super().__init__(dimension, lambda_, loss_function)
+        self.eps: float = 1e-8
+
+        self.m: np.ndarray = np.zeros(dimension)
+        self.v: np.ndarray = np.zeros(dimension)
+
+        self.beta_1: float = 0.9
+        self.beta_2: float = 0.999
+
+        self.iteration: int = 0
+    
+    def update_weights(self, gradient: np.ndarray) -> np.ndarray:
+        self.m = self.beta_1 * self.m + (1 - self.beta_1) * gradient
+        self.v = np.maximum(self.beta_2 * self.v, np.abs(gradient))
+        
+        m_hat = self.m / (1 - np.power(self.beta_1, self.iteration + 1))
+        
+        self.iteration += 1
+        
+        old_w = self.w.copy()
+        self.w = old_w - self.lr() / (self.v + self.eps) * m_hat
+        return self.w - old_w
+
+
 class BaseDescentReg(BaseDescent):
     """
     A base class with regularization
@@ -194,7 +228,8 @@ class BaseDescentReg(BaseDescent):
         """
         Calculate gradient of loss function and L2 regularization with respect to weights
         """
-        l2_gradient: np.ndarray = np.zeros_like(x.shape[1])  # TODO: replace with L2 gradient calculation
+        l2_gradient: np.ndarray = self.w
+        l2_gradient[-1] = 0
 
         return super().calc_gradient(x, y) + l2_gradient * self.mu
 
@@ -223,6 +258,12 @@ class AdamReg(BaseDescentReg, Adam):
     """
 
 
+class AdaMaxReg(BaseDescentReg, AdaMax):
+    """
+    AdaMax with regularization
+    """
+
+
 def get_descent(descent_config: dict) -> BaseDescent:
     descent_name = descent_config.get('descent_name', 'full')
     regularized = descent_config.get('regularized', False)
@@ -231,7 +272,8 @@ def get_descent(descent_config: dict) -> BaseDescent:
         'full': VanillaGradientDescent if not regularized else VanillaGradientDescentReg,
         'stochastic': StochasticDescent if not regularized else StochasticDescentReg,
         'momentum': MomentumDescent if not regularized else MomentumDescentReg,
-        'adam': Adam if not regularized else AdamReg
+        'adam': Adam if not regularized else AdamReg,
+        'adamax': AdaMax if not regularized else AdaMaxReg,
     }
 
     if descent_name not in descent_mapping:

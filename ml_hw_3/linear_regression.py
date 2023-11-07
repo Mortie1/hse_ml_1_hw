@@ -36,7 +36,9 @@ class LinearRegression:
         for _ in range(self.max_iter):
             self.loss_history.append(self.descent.calc_loss(x, y))
             weights_diff = self.descent.step(x, y)
-            if np.isnan(weights_diff).any() or np.sum(np.square(weights_diff)) < self.tolerance:
+            if np.isnan(weights_diff).any():
+                break
+            if np.sum(np.square(weights_diff)) < self.tolerance:
                 break
         self.loss_history.append(self.descent.calc_loss(x, y))
         return self
